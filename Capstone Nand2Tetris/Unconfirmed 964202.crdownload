@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Hack assembler (Nand to Tetris, Part B).  K = 65 -> K mod 3 = 2
+Extra feature: print a WARNING if the same label is defined twice.
+Also prints clear 'Line N: ...' errors instead of crashing.
+Usage: python assembler.py Prog.asm   -> writes Prog.hack
+"""
+import sys
+
+COMP = {
+    "0": "0101010", "1": "0111111", "-1": "0111010", "D": "0001100",
+    "A": "0110000", "!D": "0001101", "!A": "0110001", "-D": "0001111",
+    "-A": "0110011", "D+1": "0011111", "A+1": "0110111", "D-1": "0001110",
+    "A-1": "0110010", "D+A": "0000010", "D-A": "0010011", "A-D": "0000111",
+    "D&A": "0000000", "D|A": "0010101",
+    "M": "1110000", "!M": "1110001", "-M": "1110011", "M+1": "1110111",
+    "M-1": "1110010", "D+M": "1000010", "D-M": "1010011", "M-D": "1000111",
+    "D&M": "1000000", "D|M": "1010101",
+}
+DEST = {"": "000", "M": "001", "D": "010", "MD": "011", "A": "100",
+        "AM": "101", "AD": "110", "AMD": "111"}
+JUMP = {"": "000", "JGT": "001", "JEQ": "010", "JGE": "011",
+        "JLT": "100", "JNE": "101", "JLE": "110", "JMP": "111"}
+
+
+class AsmError(Exception):
+    pass
+
+
+def predefined():
+    t = {"SP": 0, "LCL": 1, "ARG": 2, "THIS": 3, "THAT": 4,
+         "SCREEN": 16384, "KBD": 24576}
+    for i in range(16):
+        t["R%d" % i] = i
+    return t
+
+
+def clean(line):
+    return line.split("//")[0].replace(" ", "").replace("\t", "").strip()
+
+
+def first_pass(lines):
+    """Remove comments/blanks, record label positions."""
+    symbols = predefined()
+    code, pc = [], 0
+    for num, raw in enumerate(lines, 1):
+        line = clean(raw)
+        if not line:
+            continue
+        if line.startswith("("):
+            if not line.endswith(")") or len(line) < 3:
+                print("Line %d: invalid label '%s'" % (num, line)); continue
+            name = line[1:-1]
+            if name in symbols:
+                print("WARNING Line %d: label '%s' is defined more than once"
+                      % (num, name))
+                continue
+            symbols[name] = pc
+        else:
+            code.append((num, line)); pc += 1
+    return symbols, code
+
+
+def parse_c(line):
+    dest, jump = "", ""
+    if "=" in line:
+        dest, line = line.split("=", 1)
+    if ";" in line:
+        line, jump = line.split(";", 1)
+    if dest not in DEST or line not in COMP or jump not in JUMP:
+        raise AsmError("invalid instruction '%s'" % line)
+    return "111" + COMP[line] + DEST[dest] + JUMP[jump]
+
+
+def second_pass(symbols, code):
+    out, nxt, ok = [], 16, True
+    for num, line in code:
+        try:
+            if line.startswith("@"):
+                s = line[1:]
+                if not s:
+                    raise AsmError("empty A-instruction")
+                if s.isdigit():
+                    v = int(s)
+                else:
+                    if s[0].isdigit():
+                        raise AsmError("invalid symbol '%s'" % s)
+                    if s not in symbols:
+                        symbols[s] = nxt; nxt += 1
+                    v = symbols[s]
+                if v > 32767:
+                    raise AsmError("address %d too large" % v)
+                out.append(format(v, "016b"))
+            else:
+                out.append(parse_c(line))
+        except AsmError as e:
+            print("Line %d: %s" % (num, e)); ok = False
+    return out, ok
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: python assembler.py File.asm"); return 1
+    path = sys.argv[1]
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except OSError as e:
+        print("Cannot open file:", e); return 1
+    symbols, code = first_pass(lines)
+    out, ok = second_pass(symbols, code)
+    if not ok:
+        print("Assembly failed; no .hack file written."); return 1
+    dest = path.rsplit(".", 1)[0] + ".hack"
+    with open(dest, "w") as f:
+        f.write("\n".join(out) + "\n")
+    print("Wrote %s (%d instructions)" % (dest, len(out)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
